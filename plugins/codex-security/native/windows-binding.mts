@@ -28,6 +28,14 @@ export interface WindowsHandle {
 
 /** Paths are UTF-16LE code units without a terminator, including lone surrogates. */
 export interface WindowsBinding {
+  windowsArguments(): Buffer[];
+  windowsEnvironment(name: Buffer): Buffer | null;
+  windowsAbsolutePath(path: Buffer): WindowsResult<Buffer>;
+  windowsDirectoryEntries(
+    path: Buffer,
+  ): WindowsResult<
+    { name: Buffer; isDirectory: boolean; isSymbolicLink: boolean }[]
+  >;
   openWindowsFile(
     path: Buffer,
     access: number,
@@ -36,6 +44,7 @@ export interface WindowsBinding {
     flags: number,
   ): { error: number; handle?: WindowsHandle | null };
   createWindowsDirectory(path: Buffer): number;
+  createWindowsDirectories(path: Buffer): number;
 }
 
 export const windowsFlags = {
@@ -47,6 +56,7 @@ export const windowsFlags = {
   FILE_SHARE_WRITE: 2,
   FILE_SHARE_DELETE: 4,
   CREATE_NEW: 1,
+  CREATE_ALWAYS: 2,
   OPEN_EXISTING: 3,
   OPEN_ALWAYS: 4,
   FILE_ATTRIBUTE_DIRECTORY: 0x00000010,
