@@ -1,9 +1,6 @@
 import { win32 } from "node:path";
-import {
-  windowsFlags as flags,
-  type WindowsBinding,
-  type WindowsHandle,
-} from "./windows-binding.mjs";
+import type { WindowsBinding, WindowsHandle } from "./windows-binding.mjs";
+import { windowsFlags as flags } from "./windows-flags.mjs";
 
 export const widePath = (path: string): Buffer => Buffer.from(path, "utf16le");
 export const pathText = (path: Buffer): string => path.toString("utf16le");
@@ -132,6 +129,17 @@ export function windowsFileSystem(native: WindowsBinding) {
     }
   }
 
+  function identity(path: Buffer) {
+    const handle = open(path, flags.FILE_READ_ATTRIBUTES);
+    try {
+      const result = handle.identity();
+      check(result.error, path);
+      return { volume: result.volume, fileId: result.fileId };
+    } finally {
+      check(handle.close(), path);
+    }
+  }
+
   function entriesWithTypes(path: Buffer) {
     const result = native.windowsDirectoryEntries(operationPath(path));
     check(result.error, path);
@@ -192,6 +200,7 @@ export function windowsFileSystem(native: WindowsBinding) {
     absolute,
     realpath,
     stat,
+    identity,
     entriesWithTypes,
     mkdir,
     readInto,
