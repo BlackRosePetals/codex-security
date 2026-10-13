@@ -73,6 +73,7 @@ const distModules = [
   "deduplication/deduplication",
   "finding-retrieval",
   "finding-normalization",
+  "workbench-arguments",
   "finding-workflow",
   "findings-client",
   "findings-errors",

@@ -1,3 +1,4 @@
+import { workbenchArgs } from "./workbench-arguments.js";
 import { existsSync } from "node:fs";
 import { isRecord } from "./record.js";
 import { notify } from "./value.js";
@@ -816,14 +817,11 @@ export async function matchCompletedScan(
   for (const { scanId, projected } of comparisons) {
     options.signal?.throwIfAborted();
     await options.workbench(
-      [
-        "save-scan-comparison",
-        "--before-scan-id",
-        scanId,
-        "--after-scan-id",
-        options.scanId,
-        "--matches-json-stdin",
-      ],
+      workbenchArgs("save-scan-comparison", {
+        beforeScanId: scanId,
+        afterScanId: options.scanId,
+        matchesJsonStdin: true,
+      }),
       JSON.stringify(projected),
     );
   }
