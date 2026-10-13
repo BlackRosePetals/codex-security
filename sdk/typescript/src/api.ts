@@ -32,6 +32,7 @@ import {
 } from "@openai/codex-sdk";
 import { z } from "zod";
 import { readThreatModelPath } from "./artifact-export.js";
+import { scanSkillConfig } from "./scan-skill-paths.js";
 import { isRecord } from "./record.js";
 import {
   createProfileCodex,
@@ -3043,9 +3044,10 @@ export class CodexSecurity {
         );
       }
       const runtime = this.#runtime;
-      const effectiveConfig = scanCyberAccessConfig(
-        requestedConfig,
-        options.cyberAccessProgram,
+      const effectiveConfig = await scanSkillConfig(
+        scanCyberAccessConfig(requestedConfig, options.cyberAccessProgram),
+        runtime.plugin,
+        runtime.codexHome,
       );
       const approvalPolicy = scanApprovalPolicy(effectiveConfig);
       const preflightConfig = scanPreflightCodexConfig(effectiveConfig);
@@ -4184,8 +4186,10 @@ function scanPrompt(
   const python = pluginPythonCommand();
   const customValidation = discoveryPrompt !== undefined;
   return [
+    "Use [$codex-security](mcp://codex-security) for this scan's artifact tools.",
     discoveryPrompt ??
-      `Use the installed $codex-security:${skillName} skill at ${shellEnvironmentReference("CODEX_SECURITY_PLUGIN_ROOT", `/skills/${skillName}/SKILL.md`)}.`,
+      `Read ${shellEnvironmentReference("CODEX_SECURITY_PLUGIN_ROOT", `/skills/${skillName}/SKILL.md`)} and follow that ${skillName} workflow. Resolve all of its plugin-relative references and helpers from ${shellEnvironmentReference("CODEX_SECURITY_PLUGIN_ROOT")}. This is the readable copy of the selected plugin; its installed cache under CODEX_HOME is intentionally denied.`,
+    `For a Codex Security skill invoked by the assigned workflow, remove any codex-security: prefix from its name, read ${shellEnvironmentReference("CODEX_SECURITY_PLUGIN_ROOT", "/skills/<skill-name>/SKILL.md")}, and follow that file. Resolve its relative references from its directory. Give delegated workers the same readable skill paths. Load only skills required by the assigned workflow.`,
     "Run this Codex Security scan non-interactively.",
     ...(modelProvider === "amazon-bedrock"
       ? [
@@ -4916,6 +4920,18 @@ export function scanPreflightCodexConfig(config: JsonObject): JsonObject {
     }
     const features = capabilityFeatures(source["features"]);
     if (Object.keys(features).length > 0) result["features"] = features;
+    const skills = source["skills"];
+    if (isRecord(skills) && Array.isArray(skills["config"])) {
+      result["skills"] = {
+        config: skills["config"].flatMap((entry) =>
+          isRecord(entry) &&
+          safeString(entry["path"]) &&
+          typeof entry["enabled"] === "boolean"
+            ? [{ path: entry["path"], enabled: entry["enabled"] }]
+            : [],
+        ),
+      };
+    }
     const agents = source["agents"];
     if (isRecord(agents)) {
       const sanitized: JsonObject = {};
@@ -5108,6 +5124,7 @@ function selectedWorkerRuntimeConfig(
         "model_instructions_file",
         "model_verbosity",
         "shell_environment_policy",
+        "skills",
         "web_search",
         "windows",
       ]
