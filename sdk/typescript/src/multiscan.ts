@@ -5,6 +5,7 @@ import { realpathSync } from "node:fs";
 import {
   lstat,
   mkdir,
+  mkdtemp,
   open,
   readFile,
   readdir,
@@ -22,6 +23,7 @@ import { promisify } from "node:util";
 import Papa from "papaparse";
 import type { CodexSecurity } from "./api.js";
 import type { CodexSecurityConfig } from "./config.js";
+import { ContractSchemaError, loadContract } from "./contract.js";
 import type { ScanCost } from "./cost.js";
 import { readThreatModelPath } from "./artifact-export.js";
 import {
@@ -34,7 +36,11 @@ import {
   type KnowledgeBaseSnapshot,
 } from "./knowledge-base.js";
 import { resolveScanPrompts } from "./prompt-files.js";
-import { requireSecureOutputAncestry, validateOutputDir } from "./runtime.js";
+import {
+  requireSecureOutputAncestry,
+  resolvePluginPath,
+  validateOutputDir,
+} from "./runtime.js";
 import {
   DiffTarget,
   UNSUPPORTED_GIT_ENVIRONMENT,
@@ -210,13 +216,36 @@ export async function runMultiscan(
   const output = await ensureOutputDirectory(requestedOutput);
   await requireSecureOutputAncestry(output);
   const unlock = await acquireLock(output);
+  let pluginWorkspace: string | undefined;
+  let pluginRoot: Promise<string> | undefined;
+  const resumePluginRoot = (): Promise<string> =>
+    (pluginRoot ??= (async () => {
+      if (options.config.pluginPath !== undefined) {
+        pluginWorkspace = await mkdtemp(join(output, ".resume-plugin-"));
+      }
+      return await resolvePluginPath(
+        options.config.pluginPath,
+        pluginWorkspace ?? output,
+        options.signal,
+      );
+    })());
   try {
-    const result = await runCampaign(resolvedOptions, tasks, output);
+    const result = await runCampaign(
+      resolvedOptions,
+      tasks,
+      output,
+      resumePluginRoot,
+    );
     return (await realpath(requestedOutput).catch(() => undefined)) === output
       ? { ...result, resultsPath: join(requestedOutput, "results.jsonl") }
       : result;
   } finally {
-    await unlock();
+    await Promise.all([
+      unlock(),
+      pluginWorkspace === undefined
+        ? undefined
+        : rm(pluginWorkspace, { recursive: true, force: true }),
+    ]);
   }
 }
 
@@ -224,6 +253,7 @@ async function runCampaign(
   options: MultiscanOptions,
   tasks: MultiscanTask[],
   output: string,
+  resumePluginRoot: () => Promise<string>,
 ): Promise<MultiscanResult> {
   const ledger = join(output, "results.jsonl");
   await ensureOutputDirectory(join(output, "checkouts"));
@@ -256,6 +286,7 @@ async function runCampaign(
     options.recoverScan !== undefined,
   );
   const pending: MultiscanTask[] = [];
+  const rejectedCompleted = new Set<string>();
   let completed = 0;
   let policyFailed = false;
   const warnings: NonNullable<MultiscanResult["warnings"]> = [];
@@ -295,11 +326,30 @@ async function runCampaign(
       task.id,
       `attempt-${receipt.attempt}`,
     );
+    const completedReceipt =
+      receipt.status === "completed" ||
+      (receipt.status === "failed" &&
+        receipt.error === "Multiscan repository coverage is incomplete.");
+    const selectedOutputMatches =
+      receipt.outputDir === artifactOutput ||
+      receipt.outputDir === selectedArtifactOutput;
+    const artifactsPresent =
+      selectedOutputMatches && (await hasArtifacts(artifactOutput));
     if (
-      (receipt.outputDir === artifactOutput ||
-        receipt.outputDir === selectedArtifactOutput) &&
-      (await hasArtifacts(artifactOutput))
+      completedReceipt &&
+      selectedOutputMatches &&
+      (!(await hasCompletedContract(
+        artifactOutput,
+        await resumePluginRoot(),
+        options.signal,
+      )) ||
+        !artifactsPresent)
     ) {
+      rejectedCompleted.add(artifactOutput);
+      pending.push(task);
+      continue;
+    }
+    if (artifactsPresent) {
       if (
         receipt.status === "completed" &&
         Number.isSafeInteger(receipt.attempt) &&
@@ -336,13 +386,7 @@ async function runCampaign(
           });
         }
       }
-      if (
-        receipt.status === "completed" ||
-        (await legacyCompletedReceipt({
-          ...receipt,
-          outputDir: artifactOutput,
-        }))
-      ) {
+      if (completedReceipt) {
         policyFailed ||= receipt.policyFailed === true;
         completed += 1;
         continue;
@@ -411,7 +455,12 @@ async function runCampaign(
             | (Pick<ScanResult, "manifest" | "cost" | "findings"> &
                 Partial<Pick<ScanResult, "threatModelPath">>)
             | undefined;
-          if (options.recoverScan !== undefined && retry === 0 && attempt > 0) {
+          if (
+            options.recoverScan !== undefined &&
+            retry === 0 &&
+            attempt > 0 &&
+            !rejectedCompleted.has(scanDir)
+          ) {
             const existing = await lstat(scanDir).catch(undefinedIfMissingFile);
             if (existing !== undefined) {
               await ensureOutputDirectory(scanDir);
@@ -1047,21 +1096,18 @@ async function hasArtifacts(path: string): Promise<boolean> {
   }
 }
 
-async function legacyCompletedReceipt(
-  receipt: MultiscanReceipt,
+async function hasCompletedContract(
+  path: string,
+  pluginRoot: string,
+  signal?: AbortSignal,
 ): Promise<boolean> {
-  if (
-    receipt.status !== "failed" ||
-    receipt.error !== "Multiscan repository coverage is incomplete."
-  ) {
-    return false;
-  }
   try {
-    const manifest = JSON.parse(
-      await readFile(join(receipt.outputDir, "scan-manifest.json"), "utf8"),
-    );
-    return manifest.scan?.status === "completed";
-  } catch {
+    signal?.throwIfAborted();
+    const contract = await loadContract(path, { pluginRoot, signal });
+    return contract.manifest.scan.status === "completed";
+  } catch (error) {
+    signal?.throwIfAborted();
+    if (error instanceof ContractSchemaError) throw error;
     return false;
   }
 }
