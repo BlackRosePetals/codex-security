@@ -6584,7 +6584,7 @@ describe("CodexSecurity orchestration", () => {
     await client.close();
   });
 
-  test("isolates selected skill settings in current Deep worker snapshots", async () => {
+  test("isolates selected native settings in current Deep worker snapshots", async () => {
     const root = await temporaryDirectory();
     const started = Promise.withResolvers<void>();
     let starts = 0;
@@ -6594,6 +6594,7 @@ describe("CodexSecurity orchestration", () => {
         const repository = join(root, `repository-${index}`);
         const codexHome = join(root, `home-${index}`);
         const scanDir = join(root, `scan-${index}`);
+        const sqliteHome = join(scanDir, "sqlite");
         const configPath = join(root, `worker-config-${index}.toml`);
         const installedRoot = join(codexHome, "plugins", "cache", "selected");
         const customSkill = {
@@ -6605,9 +6606,20 @@ describe("CodexSecurity orchestration", () => {
             mkdir(directory, { mode: 0o700 }),
           ),
         );
+        const nativeFile = join(root, `native-${index}.json`);
+        await writeFile(nativeFile, JSON.stringify({ models: [] }));
         const config: JsonObject = {
           profile: "selected",
-          profiles: { selected: { skills: { config: [customSkill] } } },
+          synthetic_native: { root: index, selected: "root" },
+          profiles: {
+            selected: {
+              skills: { config: [customSkill] },
+              synthetic_native: { selected: `scan-${index}` },
+              experimental_compact_prompt_file: `../native-${index}.json`,
+              model_catalog_json: `../native-${index}.json`,
+              sqlite_home: index === 0 ? "sqlite" : sqliteHome,
+            },
+          },
         };
         const client = new TestClient(
           { codexOverrides: config },
@@ -6615,8 +6627,15 @@ describe("CodexSecurity orchestration", () => {
             ...scanRuntimeDependencies(codexHome, scanDir),
             prepareRuntime: runtimePreparer(codexHome, () => ({
               configPath,
+              environment: { CODEX_SQLITE_HOME: join(root, "overridden") },
               plugin: { ...preparedRuntime(codexHome).plugin, installedRoot },
             })),
+            runWorkbench: async (options, args, input) => {
+              expect(options.environment?.["CODEX_SQLITE_HOME"]).toBe(
+                sqliteHome,
+              );
+              return mockWorkbench(args, input);
+            },
             createCodex: (options) => ({
               startThread: () => ({
                 id: null,
@@ -6629,6 +6648,7 @@ describe("CodexSecurity orchestration", () => {
                   expect(options.env?.["CODEX_SECURITY_CONFIG_PATH"]).toBe(
                     configPath,
                   );
+                  expect(options.env?.["CODEX_SQLITE_HOME"]).toBe(sqliteHome);
                   paths.add(configPath);
                   const saved = resolveCodexProfile(
                     parseToml(await readFile(configPath, "utf8")) as JsonObject,
@@ -6637,6 +6657,9 @@ describe("CodexSecurity orchestration", () => {
                     options.config as JsonObject,
                   );
                   expect(saved["skills"]).toEqual(effective["skills"]);
+                  expect(effective["sqlite_home"]).toBe(
+                    index === 0 ? "sqlite" : sqliteHome,
+                  );
                   const snapshot = parseToml(
                     await readFile(
                       options.env!["CODEX_SECURITY_DEEP_SCAN_CONFIG_PATH"]!,
@@ -6646,6 +6669,26 @@ describe("CodexSecurity orchestration", () => {
                   expect(
                     (snapshot["worker_runtime"] as JsonObject)["skills"],
                   ).toEqual(effective["skills"]);
+                  expect(
+                    (snapshot["worker_runtime"] as JsonObject)[
+                      "synthetic_native"
+                    ],
+                  ).toEqual({ root: index, selected: `scan-${index}` });
+                  for (const key of [
+                    "experimental_compact_prompt_file",
+                    "model_catalog_json",
+                  ]) {
+                    const file = (snapshot["worker_runtime"] as JsonObject)[
+                      key
+                    ];
+                    expect(file).toBe(nativeFile);
+                    expect(await readFile(file as string, "utf8")).toBe(
+                      JSON.stringify({ models: [] }),
+                    );
+                  }
+                  expect(
+                    (snapshot["worker_runtime"] as JsonObject)["sqlite_home"],
+                  ).toBe(sqliteHome);
                   const selections = (saved["skills"] as JsonObject)[
                     "config"
                   ] as JsonObject[];
