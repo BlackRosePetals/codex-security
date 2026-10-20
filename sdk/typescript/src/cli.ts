@@ -1973,7 +1973,9 @@ export async function main(
     return incurError({ code, message: outcome.error, exitCode });
   };
   const runImport = (options: ImportScanOptions) =>
-    runScanImport(options, errorOutput, dependencies);
+    withTerminalErrorsHandled(errorOutput, () =>
+      runScanImport(options, errorOutput, dependencies),
+    );
   const history = async (
     args: readonly string[],
     select: (value: JsonObject) => JsonObject | Promise<JsonObject> = (value) =>
@@ -6490,7 +6492,14 @@ async function runScanImport(
   try {
     const result = await (dependencies.importScan ?? importScan)(
       { ...options, signal: controller.signal },
-      { environment: dependencies.environment },
+      {
+        environment: dependencies.environment,
+        onWarning: (warning) => {
+          errorOutput.write(
+            `codex-security: warning: ${diagnosticValue(warning)}\n`,
+          );
+        },
+      },
     );
     if ("dryRun" in result) return { exitCode: 0, data: { ...result } };
     try {
