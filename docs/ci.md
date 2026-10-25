@@ -56,6 +56,12 @@ and host plugin, checks the Codex version across the SDK, MCP and triage
 lockfiles, and runs the triage, secret-discovery, Standard time-budget and
 workflow-routing suites.
 
+Edits limited to existing top-level `plugins/codex-security/tests/test_*.py`
+modules keep all five Python jobs, MCP, host, native, package, compatibility,
+and container checks. They skip the SDK shards, Windows install checks, Action
+and eval jobs. Adding, removing, or renaming modules, editing shared helpers,
+or including any other path selects full qualification.
+
 Inputs outside these routes select full qualification, including workflow checks,
 containers, current Node 26, Windows Node 24 installation, and Python 3.10 and
 3.14 Linux suites. This includes dependency configuration such as `.npmrc` and
