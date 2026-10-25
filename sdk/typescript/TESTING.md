@@ -47,6 +47,9 @@ The SDK shards in `node-ci` use the workflow run number as their seed, so
 rerunning a job repeats its test order. To replay a shard locally, use its
 platform, shard selector, and seed, for example
 `node --experimental-strip-types scripts/run-ci-tests.mts 2/6 --seed=12345`.
+On Linux, if the original workflow ran the separate MCP tests, prefix that
+command with `CODEX_SECURITY_TEST_MCP_WORKERS_SEPARATE=true` to skip the four
+worker groups they cover. Leave it unset to replay a run that skipped MCP.
 
 The local test commands pass a 30-second per-test timeout explicitly. Windows
 CI and the Windows runner diagnostics allow 120 seconds for slower native
@@ -184,8 +187,9 @@ Refresh timing hints from successful CI JUnit artifacts when shard runtimes
 become uneven. From the SDK directory, pass reports for one platform to
 `node --experimental-strip-types scripts/update-test-timings.mts win32 <junit.xml> ...`
 (use `linux` or `darwin` for the other platforms). The updater sums testcase
-durations per file and uses their median across reports, preserving the other
-platforms. Review and commit the generated snapshot. The initial hints use runs
+durations for executed cases per file and uses their median across reports. A
+report that skipped every case in a file leaves its timing hint unchanged. Other
+platforms retain their hints. Review and commit the generated snapshot. The initial hints use runs
 `39521539826`, `39694506447`, and `39694510011`. Keep runner versions, coverage,
 timeouts, seeds, and platform-specific checks unchanged when comparing scheduling
 changes; compare complete JUnit inventories and outcomes as well as wall time.
